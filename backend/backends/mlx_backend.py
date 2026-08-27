@@ -2,29 +2,31 @@
 MLX backend implementation for TTS and STT using mlx-audio.
 """
 
-from typing import Optional, List, Tuple
 import asyncio
 import logging
-import numpy as np
 from pathlib import Path
+from typing import List, Optional, Tuple
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 # PATCH: Import and apply offline patch BEFORE any huggingface_hub usage
 # This prevents mlx_audio from making network requests when models are cached
-from ..utils.hf_offline_patch import patch_huggingface_hub_offline, ensure_original_qwen_config_cached
+from ..utils.hf_offline_patch import ensure_original_qwen_config_cached, patch_huggingface_hub_offline  # noqa: E402
 
 patch_huggingface_hub_offline()
 ensure_original_qwen_config_cached()
 
-from . import TTSBackend, STTBackend, LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS
-from .base import (
-    is_model_cached_at,
-    resolve_model_source,
+from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt  # noqa: E402
+from . import LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS, STTBackend, TTSBackend  # noqa: E402
+from .base import (  # noqa: E402
     combine_voice_prompts as _combine_voice_prompts,
+    empty_mlx_cache,
+    is_model_cached_at,
     model_load_progress,
+    resolve_model_source,
 )
-from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt
 
 
 class MLXTTSBackend:
@@ -118,6 +120,7 @@ class MLXTTSBackend:
             del self.model
             self.model = None
             self._current_model_size = None
+            empty_mlx_cache()
             logger.info("MLX TTS model unloaded")
 
     async def create_voice_prompt(
@@ -333,6 +336,7 @@ class MLXSTTBackend:
         if self.model is not None:
             del self.model
             self.model = None
+            empty_mlx_cache()
             logger.info("MLX Whisper model unloaded")
 
     async def transcribe(

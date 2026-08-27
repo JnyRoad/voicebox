@@ -2,29 +2,31 @@
 MLX backend implementation for TTS and STT using mlx-audio.
 """
 
-from typing import Optional, List, Tuple
 import asyncio
 import logging
-import numpy as np
 from pathlib import Path
+from typing import List, Optional, Tuple
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 # PATCH: Import and apply offline patch BEFORE any huggingface_hub usage
 # This prevents mlx_audio from making network requests when models are cached
-from ..utils.hf_offline_patch import patch_huggingface_hub_offline, ensure_original_qwen_config_cached  # noqa: E402
+from ..utils.hf_offline_patch import ensure_original_qwen_config_cached, patch_huggingface_hub_offline  # noqa: E402
 
 patch_huggingface_hub_offline()
 ensure_original_qwen_config_cached()
 
-from . import TTSBackend, STTBackend, LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS  # noqa: E402
+from ..utils.cache import cache_voice_prompt, get_cache_key, get_cached_voice_prompt  # noqa: E402
+from . import LANGUAGE_CODE_TO_NAME, WHISPER_HF_REPOS, STTBackend, TTSBackend  # noqa: E402
 from .base import (  # noqa: E402
-    is_model_cached,
     combine_voice_prompts as _combine_voice_prompts,
-    model_load_progress,
     empty_mlx_cache,
+    is_model_cached_at,
+    model_load_progress,
+    resolve_model_source,
 )
-from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt  # noqa: E402
 
 
 class MLXTTSBackend:
@@ -47,7 +49,8 @@ class MLXTTSBackend:
             model_size: Model size (1.7B or 0.6B)
 
         Returns:
-            HuggingFace Hub model ID for MLX
+            HuggingFace Hub model ID (or a local ModelScope download
+            directory, if that's the active download source) for MLX
         """
         mlx_model_map = {
             "1.7B": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
@@ -57,13 +60,15 @@ class MLXTTSBackend:
         if model_size not in mlx_model_map:
             raise ValueError(f"Unknown model size: {model_size}")
 
+        # ModelScope mirrors these MLX repos under the identical repo id.
         hf_model_id = mlx_model_map[model_size]
-        logger.info("Will download MLX model from HuggingFace Hub: %s", hf_model_id)
+        resolved = resolve_model_source(hf_model_id, hf_model_id, f"qwen-tts-{model_size}")
+        logger.info("Will load MLX model from: %s", resolved)
 
-        return hf_model_id
+        return resolved
 
     def _is_model_cached(self, model_size: str) -> bool:
-        return is_model_cached(
+        return is_model_cached_at(
             self._get_model_path(model_size),
             weight_extensions=(".safetensors", ".bin", ".npz"),
         )
@@ -281,9 +286,15 @@ class MLXSTTBackend:
         """Check if model is loaded."""
         return self.model is not None
 
-    def _is_model_cached(self, model_size: str) -> bool:
+    def _get_model_path(self, model_size: str) -> str:
+        from . import WHISPER_MS_REPOS
+
         hf_repo = WHISPER_HF_REPOS.get(model_size, f"openai/whisper-{model_size}")
-        return is_model_cached(hf_repo, weight_extensions=(".safetensors", ".bin", ".npz"))
+        ms_repo = WHISPER_MS_REPOS.get(model_size)
+        return resolve_model_source(hf_repo, ms_repo, f"whisper-{model_size}")
+
+    def _is_model_cached(self, model_size: str) -> bool:
+        return is_model_cached_at(self._get_model_path(model_size), weight_extensions=(".safetensors", ".bin", ".npz"))
 
     async def load_model_async(self, model_size: Optional[str] = None):
         """
@@ -308,14 +319,14 @@ class MLXSTTBackend:
         """Synchronous model loading."""
         progress_model_name = f"whisper-{model_size}"
         is_cached = self._is_model_cached(model_size)
+        model_path = self._get_model_path(model_size)
 
         with model_load_progress(progress_model_name, is_cached):
             from mlx_audio.stt import load
 
-            model_name = WHISPER_HF_REPOS.get(model_size, f"openai/whisper-{model_size}")
             logger.info("Loading MLX Whisper model %s...", model_size)
 
-            self.model = load(model_name)
+            self.model = load(model_path)
 
         self.model_size = model_size
         logger.info("MLX Whisper model %s loaded successfully", model_size)

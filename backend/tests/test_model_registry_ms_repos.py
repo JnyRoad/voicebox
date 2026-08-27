@@ -1,7 +1,12 @@
 """Every ``ModelConfig`` in the registry gets the ``ms_repo_id`` from
 specs/001-modelscope-download-source/research.md §1 (verified live against
-modelscope.cn before this feature was built) — or stays unset for the 4
+modelscope.cn before this feature was built) — or stays unset for the 5
 models with no ModelScope mirror.
+
+``minicpm5-1b`` (added by specs/001-minicpm5-llm-engine/) has no known
+ModelScope mirror as of this writing — confirmed unset deliberately, not an
+oversight; ``resolve_model_source()`` already falls back to the HF repo id
+whenever ``ms_repo_id`` is unset, so this is a no-op, not a broken path.
 """
 
 from unittest.mock import patch
@@ -28,6 +33,7 @@ EXPECTED_PYTORCH = {
     "qwen3-0.6b": "Qwen/Qwen3-0.6B",
     "qwen3-1.7b": "Qwen/Qwen3-1.7B",
     "qwen3-4b": "Qwen/Qwen3-4B",
+    "minicpm5-1b": None,
 }
 
 EXPECTED_MLX_OVERRIDES = {
@@ -62,8 +68,8 @@ def test_mlx_backend_ms_repo_id_overrides():
         assert actual[model_name] == expected_id, f"{model_name}: {actual[model_name]!r} != {expected_id!r}"
 
 
-def test_exactly_four_models_have_no_modelscope_mirror():
+def test_exactly_five_models_have_no_modelscope_mirror():
     with patch("backend.backends.get_backend_type", return_value="pytorch"):
         actual = _ms_repo_ids_by_name()
     unmirrored = {name for name, ms_id in actual.items() if ms_id is None}
-    assert unmirrored == {"chatterbox-tts", "chatterbox-turbo", "tada-1b", "tada-3b-ml"}
+    assert unmirrored == {"chatterbox-tts", "chatterbox-turbo", "tada-1b", "tada-3b-ml", "minicpm5-1b"}
